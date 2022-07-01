@@ -378,71 +378,46 @@ function SSAOEffect(graphicsDevice, ssaoScript) {
     this.samples = 20;
     this.downscale = 1.0;
 
-    this.resize(null);
+    this.resize();
 }
 
 SSAOEffect.prototype = Object.create(pc.PostEffect.prototype);
 SSAOEffect.prototype.constructor = SSAOEffect;
 
-SSAOEffect.prototype.resize = function (target) {
+SSAOEffect.prototype.resize = function () {
+    this.width = Math.ceil(this.device.width / this.device.maxPixelRatio / this.downscale);
+    this.height = Math.ceil(this.device.height / this.device.maxPixelRatio / this.downscale);
 
-    var width, height;
-    if (target === null) {
-        width = Math.ceil(this.device.width / this.device.maxPixelRatio / this.downscale);
-        height = Math.ceil(this.device.height / this.device.maxPixelRatio / this.downscale);
-    } else {
-        width = Math.ceil(target.colorBuffer.width / this.device.maxPixelRatio / this.downscale);
-        height = Math.ceil(target.colorBuffer.height / this.device.maxPixelRatio / this.downscale);
+    var i;
+    // Free current rendertargets
+    if (this.targets) {
+        for (i = 0; i < this.targets.length; i++) {
+            this.targets[i].destroyFrameBuffers();
+            this.targets[i].destroyTextureBuffers();
+            this.targets[i].destroy();
+        }
     }
 
-    // If no change, skip resize
-    if (width === this.width && height === this.height)
-        return;
+    // Create new render targets
+    this.targets = [];
+    for (i = 0; i < 2; i++) {
+        var colorBuffer = new pc.Texture(this.device, {
+            format: pc.PIXELFORMAT_R8_G8_B8_A8,
+            minFilter: pc.FILTER_LINEAR,
+            magFilter: pc.FILTER_LINEAR,
+            addressU: pc.ADDRESS_CLAMP_TO_EDGE,
+            addressV: pc.ADDRESS_CLAMP_TO_EDGE,
+            width: this.width,
+            height: this.height,
+            mipmaps: false
+        });
+        var ssaoTarget = new pc.RenderTarget({
+            colorBuffer: colorBuffer,
+            depth: false
+        });
 
-    // Render targets
-    this.width = width;
-    this.height = height;
-    if (this.target) {
-        this.target.destroyFrameBuffers();
-        this.target.destroyTextureBuffers();
-        this.target.destroy();
-        this.target = null;
-
-        this.blurTarget.destroyFrameBuffers();
-        this.blurTarget.destroyTextureBuffers();
-        this.blurTarget.destroy();
-        this.blurTarget = null;
+        this.targets.push(ssaoTarget);
     }
-    var ssaoResultBuffer = new pc.Texture(this.device, {
-        format: pc.PIXELFORMAT_R8_G8_B8_A8,
-        minFilter: pc.FILTER_LINEAR,
-        magFilter: pc.FILTER_LINEAR,
-        addressU: pc.ADDRESS_CLAMP_TO_EDGE,
-        addressV: pc.ADDRESS_CLAMP_TO_EDGE,
-        width: this.width,
-        height: this.height,
-        mipmaps: false
-    });
-    ssaoResultBuffer.name = 'ssao';
-    this.target = new pc.RenderTarget({
-        colorBuffer: ssaoResultBuffer,
-        depth: false
-    });
-
-    var ssaoBlurBuffer = new pc.Texture(this.device, {
-        format: pc.PIXELFORMAT_R8_G8_B8_A8,
-        minFilter: pc.FILTER_LINEAR,
-        magFilter: pc.FILTER_LINEAR,
-        addressU: pc.ADDRESS_CLAMP_TO_EDGE,
-        addressV: pc.ADDRESS_CLAMP_TO_EDGE,
-        width: this.width,
-        height: this.height,
-        mipmaps: false
-    });
-    this.blurTarget = new pc.RenderTarget({
-        colorBuffer: ssaoBlurBuffer,
-        depth: false
-    });
 };
 
 Object.assign(SSAOEffect.prototype, {
@@ -479,9 +454,9 @@ Object.assign(SSAOEffect.prototype, {
         scope.resolve("uProjectionScaleRadius").setValue(projectionScale * radius);
 
         // Render SSAO
-        pc.drawFullscreenQuad(device, this.target, this.vertexBuffer, this.ssaoShader, rect);
+        pc.drawFullscreenQuad(device, this.targets[0], this.vertexBuffer, this.ssaoShader, rect);
 
-        scope.resolve("uSSAOBuffer").setValue(this.target.colorBuffer);
+        scope.resolve("uSSAOBuffer").setValue(this.targets[0].colorBuffer);
 
         // scope.resolve("uFarPlaneOverEdgeDistance").setValue(cameraFarClip / bilateralThreshold);
         scope.resolve("uFarPlaneOverEdgeDistance").setValue(1);
@@ -489,11 +464,11 @@ Object.assign(SSAOEffect.prototype, {
         scope.resolve("uBilatSampleCount").setValue(4);
 
         // Perform the blur
-        pc.drawFullscreenQuad(device, this.blurTarget, this.vertexBuffer, this.blurShader, rect);
+        pc.drawFullscreenQuad(device, this.targets[1], this.vertexBuffer, this.blurShader, rect);
 
         // Finally output to screen
         scope.resolve("uUpscale").setValue(1.0 / this.downscale);
-        scope.resolve("uSSAOBuffer").setValue(this.blurTarget.colorBuffer);
+        scope.resolve("uSSAOBuffer").setValue(this.targets[1].colorBuffer);
         scope.resolve("uColorBuffer").setValue(inputTarget.colorBuffer);
         pc.drawFullscreenQuad(device, outputTarget, this.vertexBuffer, this.outputShader, rect);
     }
@@ -541,12 +516,12 @@ SSAO.prototype.initialize = function () {
     this.effect.samples = this.samples;
     this.effect.downscale = this.downscale;
 
-    this.on('attr', function (name, value) {
-        this.effect[name] = value;
-    }, this);
-
     var queue = this.entity.camera.postEffects;
     queue.addEffect(this.effect);
+
+    this.app.graphicsDevice.on('resizecanvas', function () {
+        this.effect.resize();
+    }, this);
 
     this.on('state', function (enabled) {
         if (enabled) {
@@ -556,8 +531,11 @@ SSAO.prototype.initialize = function () {
         }
     });
 
+    this.on('attr', function (name, value) {
+        this.effect[name] = value;
+    }, this);
+
     this.on('attr:downscale', () => {
-        if (!this.enabled) return;
         this.effect.resize();
     });
 

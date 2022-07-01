@@ -180,27 +180,15 @@ function BloomEffect(graphicsDevice) {
     this.sampleWeights = new Float32Array(SAMPLE_COUNT);
     this.sampleOffsets = new Float32Array(SAMPLE_COUNT * 2);
 
-    this.resize(null);
+    this.resize();
 }
 
 BloomEffect.prototype = Object.create(pc.PostEffect.prototype);
 BloomEffect.prototype.constructor = BloomEffect;
 
-BloomEffect.prototype.resize = function (target) {
-
-    var width, height;
-    if (target === null) {
-        width = this.device.width;
-        height = this.device.height;
-    } else {
-        width = target.colorBuffer.width;
-        height = target.colorBuffer.height;
-    }
-
-    if (width === this.width && height === this.height)
-        return;
-
+BloomEffect.prototype.resize = function () {
     var i;
+    // Free current rendertargets
     if (this.targets) {
         for (i = 0; i < this.targets.length; i++) {
             this.targets[i].destroyFrameBuffers();
@@ -209,13 +197,13 @@ BloomEffect.prototype.resize = function (target) {
         }
     }
 
-    // Render targets
+    // Create new render targets
     this.targets = [];
     for (i = 0; i < 2; i++) {
         var colorBuffer = new pc.Texture(this.device, {
             format: pc.PIXELFORMAT_R8_G8_B8_A8,
-            width: width >> 1,
-            height: height >> 1,
+            width: this.device.width >> 1,
+            height: this.device.height >> 1,
             mipmaps: false
         });
         colorBuffer.minFilter = pc.FILTER_LINEAR;
@@ -302,8 +290,11 @@ Bloom.prototype.initialize = function () {
     this.effect.bloomIntensity = this.bloomIntensity;
 
     var queue = this.entity.camera.postEffects;
-
     queue.addEffect(this.effect);
+
+    this.app.graphicsDevice.on('resizecanvas', function () {
+        this.effect.resize();
+    }, this);
 
     this.on('attr', function (name, value) {
         this.effect[name] = value;
